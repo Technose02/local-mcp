@@ -1,0 +1,71 @@
+# local-websearch-mcp configuration
+#
+# Copy this file to `config.toml` and adjust as needed. Every value shown here is
+# also the built-in default, so an absent/empty file behaves identically.
+
+[server]
+# Bind address. The server is meant to run locally; use 0.0.0.0:PORT only when you
+# intentionally want to expose it to another machine / a Docker container.
+bind = "127.0.0.1:8000"
+# HTTP route the Streamable HTTP MCP endpoint is mounted on.
+path = "/mcp"
+# Reply with a plain `application/json` body for simple tool calls instead of SSE.
+json_response = true
+# Serve pre-2026-07-28 clients without sessions. Set true only for legacy clients.
+legacy_session_mode = false
+# Browser origins allowed to call this server (CORS + Private Network Access).
+# Use ["*"] to allow any browser origin, or an explicit list such as
+# ["https://chat.example", "http://localhost:3000"]. An empty list disables CORS.
+cors_origins = ["*"]
+
+# Optional direct HTTPS. Requires a binary built with the `tls` Cargo feature:
+#   cargo build --release --features tls
+# Leave disabled to serve plain HTTP (default), which is the right choice when
+# TLS is terminated by a reverse proxy or when connecting over a private network.
+[server.tls]
+enabled = false
+cert_path = ""
+key_path = ""
+
+[http]
+# Timeout for outbound provider requests, in milliseconds.
+timeout_ms = 15000
+# User-Agent used for outbound requests. Some keyless providers (DuckDuckGo) reject
+# requests that do not look like a browser.
+user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
+[tools]
+# Tool names that should be registered but return an error when called.
+disabled = []
+
+[usage]
+# When true, providers that are only acceptable for non-commercial/private use
+# (currently: DuckDuckGo HTML scraping) are disabled automatically. See README.md.
+commercial = false
+
+[providers]
+# Ordered search-provider fallback chain. The first provider returning results wins.
+# Supported: "tavily", "duckduckgo", "firecrawl", "wikipedia".
+order = ["tavily", "duckduckgo", "wikipedia"]
+# Ordered content-extraction chain used by the `fetch_url` tool.
+# Supported: "tavily", "firecrawl", "direct".
+extract_order = ["tavily", "firecrawl", "direct"]
+
+# --- Per-provider options -----------------------------------------------------
+# `enabled` turns a provider off. `api_key` is optional: leaving it empty uses the
+# provider's keyless mode (where available) or the matching environment variable
+# (TAVILY_API_KEY / FIRECRAWL_API_KEY). Only *free* tiers are supported.
+
+[providers.tavily]
+enabled = true
+api_key = ""
+
+[providers.firecrawl]
+enabled = true
+api_key = ""
+
+[providers.duckduckgo]
+enabled = true
+
+[providers.wikipedia]
+enabled = true
