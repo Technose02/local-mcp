@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, ConfigError};
 
@@ -12,6 +12,8 @@ pub const EXAMPLE_CONFIG: &str = include_str!("../config.toml.example");
 
 /// Default browser-like user agent. Keyless scrapers (DuckDuckGo) need this.
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
+const DEFAULT_CONFIG_FILE: &str = "./config.toml";
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -41,7 +43,7 @@ pub struct Cli {
     pub print_example_config: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 #[derive(Default)]
 pub struct AppConfig {
@@ -53,7 +55,7 @@ pub struct AppConfig {
     pub time: TimeSettings,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ServerSettings {
     pub bind: String,
@@ -68,7 +70,7 @@ pub struct ServerSettings {
 
 /// Optional HTTPS settings. Only usable when the binary is built with the `tls`
 /// Cargo feature; the default build serves plain HTTP.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TlsSettings {
     pub enabled: bool,
@@ -89,7 +91,7 @@ impl Default for ServerSettings {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HttpSettings {
     pub timeout_ms: u64,
@@ -105,21 +107,21 @@ impl Default for HttpSettings {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ToolSettings {
     /// Tool names that stay registered but return an error when invoked.
     pub disabled: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UsageSettings {
     /// Disable providers that are not acceptable for commercial use.
     pub commercial: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TimeSettings {
     /// Timezone used when no reliable region clue is available.
@@ -134,7 +136,7 @@ impl Default for TimeSettings {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ProvidersSettings {
     /// Ordered search-provider fallback chain.
@@ -160,7 +162,7 @@ impl Default for ProvidersSettings {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ProviderOptions {
     pub enabled: bool,
@@ -203,8 +205,22 @@ pub fn load_config(cli: &Cli) -> Result<AppConfig, AppError> {
         toml::from_str::<AppConfig>(&text)
             .map_err(|error| ConfigError::parse(&cli.config, error))?
     } else {
-        tracing::warn!(path = %cli.config.display(), "config file not found; using defaults");
-        AppConfig::default()
+        if let Ok(true) = std::fs::exists(DEFAULT_CONFIG_FILE)
+            && let Ok(config_data) = std::fs::read_to_string(DEFAULT_CONFIG_FILE)
+            && let Ok(config) = toml::from_str::<AppConfig>(&config_data)
+        {
+            config
+        } else {
+            tracing::warn!(path = %cli.config.display(), "default config file not found; creating it");
+            let default_config = AppConfig::default();
+            std::fs::write(
+                DEFAULT_CONFIG_FILE,
+                toml::to_string::<AppConfig>(&default_config)
+                    .expect("error serializing default config"),
+            )
+            .unwrap_or_else(|e| panic!("error writing to '{DEFAULT_CONFIG_FILE}': {e}"));
+            AppConfig::default()
+        }
     };
 
     if let Some(bind) = &cli.bind {
