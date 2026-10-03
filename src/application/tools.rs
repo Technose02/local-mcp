@@ -6,6 +6,7 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::clock::{TimeQuery, TimeReport, TimeService};
 use crate::domain::explore::{ExploreRequest, ExploreService};
 use crate::domain::fetch::{FetchRequest, FetchService, Link};
 use crate::domain::search::{Freshness, SearchOutcome, WebSearchService};
@@ -297,4 +298,68 @@ pub async fn run_explore_site(
         pages: result.pages.into_iter().map(LinkDto::from).collect(),
         sitemap_urls: result.sitemap_urls,
     })
+}
+
+// ---------------------------------------------------------------------------
+// current_datetime
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CurrentDatetimeArgs {
+    /// Optional explicit timezone: an IANA name like "Europe/Berlin" or a UTC offset like "+02:00".
+    #[serde(default)]
+    pub timezone: Option<String>,
+    /// Optional region hint from the conversation, e.g. "de-DE", "Germany", "US", "New York".
+    #[serde(default)]
+    pub locale: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CurrentDatetimeOutput {
+    pub datetime: String,
+    pub date: String,
+    pub time: String,
+    pub weekday: String,
+    pub timezone: String,
+    pub utc_offset: String,
+    pub unix_seconds: i64,
+    pub utc: String,
+    pub timezone_source: String,
+    pub certainty: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl From<TimeReport> for CurrentDatetimeOutput {
+    fn from(report: TimeReport) -> Self {
+        Self {
+            datetime: report.datetime,
+            date: report.date,
+            time: report.time,
+            weekday: report.weekday,
+            timezone: report.timezone,
+            utc_offset: report.utc_offset,
+            unix_seconds: report.unix_seconds,
+            utc: report.utc,
+            timezone_source: report.source.as_str().to_string(),
+            certainty: report.certainty.as_str().to_string(),
+            note: report.note,
+        }
+    }
+}
+
+pub fn run_current_datetime(
+    service: &TimeService,
+    args: CurrentDatetimeArgs,
+    request_locale: Option<String>,
+) -> Result<CurrentDatetimeOutput, ToolError> {
+    let query = TimeQuery {
+        timezone: clean_optional(args.timezone),
+        locale: clean_optional(args.locale),
+        request_locale,
+    };
+    service
+        .current(query)
+        .map(CurrentDatetimeOutput::from)
+        .map_err(|error| ToolError::Failed(error.to_string()))
 }

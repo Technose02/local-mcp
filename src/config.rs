@@ -15,9 +15,9 @@ pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKi
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    name = "local-websearch-mcp",
+    name = "local-mcp",
     version,
-    about = "Local web-search MCP server (Streamable HTTP transport)"
+    about = "Local MCP server: web search, page fetching and current date/time (Streamable HTTP)"
 )]
 pub struct Cli {
     /// Path to the TOML configuration file.
@@ -50,6 +50,7 @@ pub struct AppConfig {
     pub tools: ToolSettings,
     pub usage: UsageSettings,
     pub providers: ProvidersSettings,
+    pub time: TimeSettings,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -116,6 +117,21 @@ pub struct ToolSettings {
 pub struct UsageSettings {
     /// Disable providers that are not acceptable for commercial use.
     pub commercial: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TimeSettings {
+    /// Timezone used when no reliable region clue is available.
+    pub default_timezone: String,
+}
+
+impl Default for TimeSettings {
+    fn default() -> Self {
+        Self {
+            default_timezone: "Europe/Berlin".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

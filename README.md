@@ -1,4 +1,4 @@
-# local-websearch-mcp
+# local-mcp
 
 A **local, single-user MCP server** that gives an LLM tool access to the **live web**
 over the **Streamable HTTP** transport. It is meant to run on your own machine
@@ -8,6 +8,8 @@ Docker container.
 The tools are designed around the fact that a model's knowledge is stale the day it
 is written:
 
+- **`current_datetime`** — the real current local date/time (models do not know
+  "now"), with a region-aware timezone and a subtle confidence flag.
 - **`web_search`** — find current information that is missing or outdated.
 - **`fetch_url`** — read a specific page in full (docs, changelogs, release notes),
   with paging and optional link discovery.
@@ -31,7 +33,7 @@ small, isolated change (see [Architecture](#architecture)).
 ```bash
 cargo build --release
 cp config.toml.example config.toml   # optional; defaults work without it
-./target/release/local-websearch-mcp
+./target/release/local-mcp
 ```
 
 Optional HTTPS support is compiled in only when requested:
@@ -45,7 +47,7 @@ Default endpoint: `http://127.0.0.1:8000/mcp`.
 Useful flags (all optional, they override `config.toml`):
 
 ```bash
-local-websearch-mcp \
+local-mcp \
   --config config.toml \
   --bind 127.0.0.1:8000 \
   --providers tavily,duckduckgo,wikipedia \
@@ -80,6 +82,10 @@ disabled = []               # e.g. ["explore_site"]
 
 [usage]
 commercial = false          # see "Acceptable use" below
+
+[time]
+# Timezone used by `current_datetime` when no reliable region clue is available.
+default_timezone = "Europe/Berlin"
 
 [providers]
 order = ["tavily", "duckduckgo", "wikipedia"]        # search fallback chain (first hit wins)
@@ -117,7 +123,7 @@ client entry looks like:
 ```json
 {
   "mcpServers": {
-    "local-websearch": {
+    "local-mcp": {
       "type": "http",
       "url": "http://localhost:8000/mcp"
     }
@@ -191,6 +197,28 @@ falling back to HTTP.
 
 ## Tools
 
+### `current_datetime`
+
+Returns the real current local date/time, weekday, timezone and UTC offset. Call
+it whenever an exact date/time matters (scheduling, "today", "latest", age/expiry,
+relative time references).
+
+| Argument | Type | Description |
+|---|---|---|
+| `timezone` | string | Optional IANA name (`Europe/Berlin`) or UTC offset (`+02:00`). |
+| `locale` | string | Optional region hint, e.g. `de-DE`, `Germany`, `US`, `New York`. |
+
+Returns `{ datetime, date, time, weekday, timezone, utc_offset, unix_seconds, utc,
+ timezone_source, certainty, note? }`.
+
+**How the region is chosen.** Clues are combined in priority order: explicit
+`timezone` > `locale` argument > request `Accept-Language` header > the system time
+zone > the configured default. If the clues are missing or contradict each other,
+the configured default is used and the answer is marked with `certainty: "low"` and
+a short `note` (e.g. `timezone assumed: Europe/Berlin (no reliable region hint)`).
+The date/time values stay clean — the assumption is only flagged, so a wrong region
+is noticeable without corrupting the answer.
+
 ### `web_search`
 
 Search the public web. Use it whenever an answer may be newer than your training
@@ -251,6 +279,7 @@ src/
     search.rs                 SearchProvider port, WebSearchService, SearchError
     fetch.rs                  ExtractProvider/LinkSource/SiteMapSource ports, FetchService
     explore.rs                ExploreService, target/URL helpers
+    clock.rs                  TimeService: system clock + region resolution (jiff)
   application/                MCP adapter / use cases
     server.rs                 ServerHandler + #[tool_router] (thin)
     tools.rs                  argument DTOs, result DTOs, glue to the domain
@@ -329,5 +358,6 @@ cargo check
 
 ## License
 
-MIT for this project. Provider data and services remain under their own terms — see
+Licensed under the **Apache License, Version 2.0**. See [`LICENSE`](LICENSE).
+Provider data and services remain under their own terms — see
 [Acceptable use](#acceptable-use-freeprivate-vs-commercial).

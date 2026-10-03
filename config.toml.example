@@ -1,4 +1,4 @@
-# local-websearch-mcp configuration
+# local-mcp configuration
 #
 # Copy this file to `config.toml` and adjust as needed. Every value shown here is
 # also the built-in default, so an absent/empty file behaves identically.
@@ -42,6 +42,12 @@ disabled = []
 # When true, providers that are only acceptable for non-commercial/private use
 # (currently: DuckDuckGo HTML scraping) are disabled automatically. See README.md.
 commercial = false
+
+[time]
+# Timezone used by the `current_datetime` tool when no reliable region clue is
+# available (no explicit timezone, no locale hint, no useful system zone).
+# The answer flags this assumption via its `certainty`/`note` fields.
+default_timezone = "Europe/Berlin"
 
 [providers]
 # Ordered search-provider fallback chain. The first provider returning results wins.

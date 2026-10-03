@@ -16,8 +16,9 @@ use rmcp::transport::streamable_http_server::{
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::application::server::WebSearchServer;
+use crate::application::server::LocalToolsServer;
 use crate::config::{Cli, ServerSettings, load_config};
+use crate::domain::clock::TimeService;
 use crate::domain::explore::ExploreService;
 use crate::domain::fetch::{FetchService, LinkSource, SiteMapSource};
 use crate::domain::search::WebSearchService;
@@ -72,18 +73,21 @@ async fn run() -> Result<(), AppError> {
     let sitemap: Arc<dyn SiteMapSource> = direct.clone();
     let fetch_service = Arc::new(FetchService::new(extract_providers, links.clone()));
     let explore_service = Arc::new(ExploreService::new(search_service.clone(), links, sitemap));
+    let time_service = Arc::new(TimeService::new(config.time.default_timezone.clone()));
 
     let disabled_tools = config.tools.disabled.clone();
     let factory = {
         let search = search_service.clone();
         let fetch = fetch_service.clone();
         let explore = explore_service.clone();
+        let time = time_service.clone();
         let disabled = disabled_tools.clone();
         move || {
-            Ok(WebSearchServer::new(
+            Ok(LocalToolsServer::new(
                 search.clone(),
                 fetch.clone(),
                 explore.clone(),
+                time.clone(),
                 disabled.clone(),
             ))
         }

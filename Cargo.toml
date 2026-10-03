@@ -1,9 +1,9 @@
 [package]
-name = "local-websearch-mcp"
+name = "local-mcp"
 version = "0.1.0"
 edition = "2024"
-description = "Local web-search MCP server (Streamable HTTP transport)"
-license = "MIT"
+description = "Local MCP server: web search, page fetching and current date/time over Streamable HTTP"
+license = "Apache-2.0"
 
 [features]
 default = []
@@ -24,6 +24,8 @@ tokio-util = { version = "0.7", features = ["rt"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "charset"] }
 # Pure-Rust HTML parsing for the DuckDuckGo provider and readable-text fallback.
 tl = "0.7"
+# Date/time with bundled IANA time zones (system zone, DST, named zones).
+jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
 # URL parsing / relative-link resolution (already a transitive reqwest dependency).
 url = "2"
 # CLI + TOML configuration.

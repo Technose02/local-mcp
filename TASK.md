@@ -1,4 +1,4 @@
-# TASK: local-websearch-mcp
+# TASK: local-mcp
 
 > Status: **implemented and smoke-tested on Linux; provider chains verified live.**
 > This file is the single source of truth for scope and decisions.
@@ -36,6 +36,7 @@ The server must let the model:
 - **Unit tests** (mandatory). No integration tests for now.
 - Providers must be **free to use (no cost)**. Free accounts are allowed if
   necessary; **paid plans must never be required or supported**.
+- **License: Apache-2.0** (public repository); see `LICENSE`.
 
 ## 3. Confirmed decisions (from Q&A with the user)
 
@@ -105,6 +106,8 @@ direct `reqwest` fetch + `tl`-based readable-text fallback.
   - `tokio-util = { version = "0.7", features = ["rt"] }` (cancellation token for graceful shutdown)
   - `reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "charset"] }`
   - `tl = "0.7"` (pure-Rust HTML parsing: DDG results + link discovery + readability fallback)
+  - `jiff = { version = "0.2", features = ["tzdb-bundle-always"] }`
+    (system time zone, IANA zones + DST, bundled time zone data for Windows/Docker)
   - `url = "2"` (URL validation, relative-link resolution, wiki URL encoding)
   - `clap = { version = "4", features = ["derive"] }`
   - `toml = "1"`, `serde = { version = "1", features = ["derive"] }`, `serde_json = "1"`,
@@ -113,7 +116,18 @@ direct `reqwest` fetch + `tl`-based readable-text fallback.
 
 ## 6. Tool surface (designed from the LLM's perspective)
 
-Register tools under a `tools/` module so more can be added trivially. Three tools:
+Register tools under a `tools/` module so more can be added trivially. Four tools:
+
+### `current_datetime`
+Local date/time with region inference and a confidence flag (models do not know "now").
+- in: `timezone: Option<String>` (IANA name or `+HH:MM`), `locale: Option<String>`
+  (e.g. `de-DE`, `Germany`, `US`)
+- out: `{ datetime, date, time, weekday, timezone, utc_offset, unix_seconds, utc,
+  timezone_source, certainty, note? }`
+- resolution priority: explicit timezone > locale argument > request `Accept-Language`
+  > system time zone > configured default (`[time] default_timezone`, default
+  `Europe/Berlin`). Missing/conflicting clues -> default zone, `certainty: "low"`,
+  short `note`; values stay clean so a wrong region is noticeable but not disruptive.
 
 ### `web_search`
 Search the public web for current/otherwise-missing information.
@@ -154,6 +168,7 @@ src/
     search.rs                 # SearchProvider port, WebSearchService, SearchError
     fetch.rs                  # ExtractProvider/LinkSource/SiteMapSource ports, FetchService
     explore.rs                # ExploreService + target/host helpers
+    clock.rs                  # TimeService: system clock + region resolution (jiff)
   application/                # MCP adapter / use cases
     mod.rs
     server.rs                 # ServerHandler + #[tool_router] (thin)
@@ -229,6 +244,10 @@ The README must document:
   - `explore_site` on `docs.rs/tokio`: 5 pages + 33 sitemap URLs.
   - `usage.commercial = true` disables DuckDuckGo and logs a warning
     (chain becomes `["tavily", "wikipedia"]`).
+  - `current_datetime`: system zone -> `system`/`medium`; `TZ=UTC` + no hints ->
+    `Europe/Berlin`, `default`/`low` with a short note; `Accept-Language: en-GB` ->
+    `Europe/London`, `request`/`medium`; explicit `timezone: "Asia/Tokyo"` ->
+    `explicit`/`high`; conflicting clues -> default zone, `low`, conflict note.
 - Browser access: `OPTIONS` preflight returns `204` with CORS headers and
   `Access-Control-Allow-Private-Network: true`; actual responses carry
   `Access-Control-Allow-Origin`.

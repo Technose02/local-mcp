@@ -8,36 +8,41 @@ use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
-use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::application::tools::{
-    ExploreSiteArgs, FetchUrlArgs, ToolError, WebSearchArgs, run_explore_site, run_fetch_url,
-    run_web_search,
+    CurrentDatetimeArgs, ExploreSiteArgs, FetchUrlArgs, ToolError, WebSearchArgs,
+    run_current_datetime, run_explore_site, run_fetch_url, run_web_search,
 };
+use crate::domain::clock::TimeService;
 use crate::domain::explore::ExploreService;
 use crate::domain::fetch::FetchService;
 use crate::domain::search::WebSearchService;
 
 #[derive(Clone)]
-pub struct WebSearchServer {
+pub struct LocalToolsServer {
     search: Arc<WebSearchService>,
     fetch: Arc<FetchService>,
     explore: Arc<ExploreService>,
+    time: Arc<TimeService>,
     disabled_tools: Arc<Vec<String>>,
 }
 
 #[tool_router]
-impl WebSearchServer {
+impl LocalToolsServer {
     pub fn new(
         search: Arc<WebSearchService>,
         fetch: Arc<FetchService>,
         explore: Arc<ExploreService>,
+        time: Arc<TimeService>,
         disabled_tools: Vec<String>,
     ) -> Self {
         Self {
             search,
             fetch,
             explore,
+            time,
             disabled_tools: Arc::new(disabled_tools),
         }
     }
@@ -84,6 +89,21 @@ impl WebSearchServer {
         to_json_result(&output)
     }
 
+    #[tool(
+        description = "Get the current local date and time. Call this whenever the exact current date/time matters (scheduling, 'today', 'latest', age/expiry, relative time references) - models do not know the current time. Returns the date, time, weekday, timezone and UTC offset. Pass `timezone` (IANA name or UTC offset) or `locale` (e.g. 'de-DE', 'US') when the relevant region is known; otherwise a default region is assumed and flagged in the response."
+    )]
+    async fn current_datetime(
+        &self,
+        Parameters(args): Parameters<CurrentDatetimeArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        self.ensure_enabled("current_datetime")?;
+        let request_locale = request_locale_from_context(&context);
+        let output = run_current_datetime(&self.time, args, request_locale)
+            .map_err(ToolError::into_error_data)?;
+        to_json_result(&output)
+    }
+
     fn ensure_enabled(&self, name: &str) -> Result<(), McpError> {
         if self.disabled_tools.iter().any(|tool| tool == name) {
             Err(McpError::invalid_params(
@@ -96,13 +116,28 @@ impl WebSearchServer {
     }
 }
 
+/// Best-effort region clue from the HTTP `Accept-Language` header (browser clients).
+fn request_locale_from_context(context: &RequestContext<RoleServer>) -> Option<String> {
+    let parts = context.extensions.get::<axum::http::request::Parts>()?;
+    let header = parts
+        .headers
+        .get(axum::http::header::ACCEPT_LANGUAGE)?
+        .to_str()
+        .ok()?;
+    header
+        .split(',')
+        .next()
+        .map(|entry| entry.split(';').next().unwrap_or(entry).trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 #[tool_handler]
-impl ServerHandler for WebSearchServer {
+impl ServerHandler for LocalToolsServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "Local web research tools. `web_search` finds current information beyond your knowledge cutoff, `fetch_url` reads a specific page (optionally listing its links), and `explore_site` discovers pages around a destination. Providers are free/keyless; results may be rate-limited, so retry or adjust the query if a tool reports a provider failure.",
+                "Local tools for grounding. `current_datetime` returns the real current date/time (call it before answering anything time-dependent). `web_search` finds current information beyond your knowledge cutoff, `fetch_url` reads a specific page (optionally listing its links), and `explore_site` discovers pages around a destination. Search providers are free/keyless; results may be rate-limited, so retry or adjust the query if a tool reports a provider failure.",
             )
     }
 }
