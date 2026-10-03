@@ -24,8 +24,8 @@ cors_origins = ["*"]
 # TLS is terminated by a reverse proxy or when connecting over a private network.
 [server.tls]
 enabled = false
-cert_path = ""
-key_path = ""
+# cert_path = "cert.pem"   # required when enabled = true
+# key_path = "key.pem"     # required when enabled = true
 
 [http]
 # Timeout for outbound provider requests, in milliseconds.
@@ -64,11 +64,11 @@ extract_order = ["tavily", "firecrawl", "direct"]
 
 [providers.tavily]
 enabled = true
-api_key = ""
+# api_key = ""             # optional free-tier key; or set TAVILY_API_KEY
 
 [providers.firecrawl]
 enabled = true
-api_key = ""
+# api_key = ""             # optional free-tier key; or set FIRECRAWL_API_KEY
 
 [providers.duckduckgo]
 enabled = true

@@ -44,8 +44,8 @@ async fn run() -> Result<(), AppError> {
         return Ok(());
     }
 
-    let config = load_config(&cli)?;
     init_tracing(&cli)?;
+    let config = load_config(&cli)?;
     tracing::debug!(?config, "configuration loaded");
 
     let http = HttpClient::new(config.http.timeout_ms, config.http.user_agent.clone())?;

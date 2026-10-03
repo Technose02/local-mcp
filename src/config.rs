@@ -1,6 +1,6 @@
 //! Configuration: `config.toml` plus `clap` command-line overrides.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -12,8 +12,6 @@ pub const EXAMPLE_CONFIG: &str = include_str!("../config.toml.example");
 
 /// Default browser-like user agent. Keyless scrapers (DuckDuckGo) need this.
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
-
-const DEFAULT_CONFIG_FILE: &str = "./config.toml";
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -198,30 +196,18 @@ impl ProviderOptions {
 }
 
 /// Load configuration from disk and apply CLI overrides.
+///
+/// If the configured path does not exist yet, a commented default configuration is
+/// written there first, so the user always has a file to inspect and edit.
 pub fn load_config(cli: &Cli) -> Result<AppConfig, AppError> {
-    let mut config = if cli.config.exists() {
-        let text = std::fs::read_to_string(&cli.config)
-            .map_err(|error| ConfigError::read(&cli.config, error))?;
-        toml::from_str::<AppConfig>(&text)
-            .map_err(|error| ConfigError::parse(&cli.config, error))?
-    } else {
-        if let Ok(true) = std::fs::exists(DEFAULT_CONFIG_FILE)
-            && let Ok(config_data) = std::fs::read_to_string(DEFAULT_CONFIG_FILE)
-            && let Ok(config) = toml::from_str::<AppConfig>(&config_data)
-        {
-            config
-        } else {
-            tracing::warn!(path = %cli.config.display(), "default config file not found; creating it");
-            let default_config = AppConfig::default();
-            std::fs::write(
-                DEFAULT_CONFIG_FILE,
-                toml::to_string::<AppConfig>(&default_config)
-                    .expect("error serializing default config"),
-            )
-            .unwrap_or_else(|e| panic!("error writing to '{DEFAULT_CONFIG_FILE}': {e}"));
-            AppConfig::default()
-        }
-    };
+    if !cli.config.exists() {
+        create_default_config(&cli.config)?;
+    }
+
+    let text = std::fs::read_to_string(&cli.config)
+        .map_err(|error| ConfigError::read(&cli.config, error))?;
+    let mut config = toml::from_str::<AppConfig>(&text)
+        .map_err(|error| ConfigError::parse(&cli.config, error))?;
 
     if let Some(bind) = &cli.bind {
         config.server.bind = bind.clone();
@@ -241,4 +227,48 @@ pub fn load_config(cli: &Cli) -> Result<AppConfig, AppError> {
     }
 
     Ok(config)
+}
+
+/// Write the annotated default configuration to `path` if it does not exist.
+///
+/// `EXAMPLE_CONFIG` is the documented default (also printed by
+/// `--print-example-config`); the unit test below keeps it in sync with
+/// [`AppConfig::default`].
+fn create_default_config(path: &Path) -> Result<(), ConfigError> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| ConfigError::write(path, error))?;
+    }
+
+    // Write to a temporary file first so an interrupted start never leaves a
+    // half-written configuration behind.
+    let temporary = path.with_extension("toml.tmp");
+    std::fs::write(&temporary, EXAMPLE_CONFIG).map_err(|error| ConfigError::write(path, error))?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(ConfigError::write(path, error));
+    }
+
+    tracing::info!(path = %path.display(), "created default configuration file");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The annotated example must stay identical to the in-code defaults, because
+    /// it is what gets written on first start.
+    #[test]
+    fn example_config_matches_defaults() {
+        let parsed: AppConfig = toml::from_str(EXAMPLE_CONFIG).expect("example config parses");
+        let parsed = serde_json::to_value(&parsed).expect("serialize parsed example");
+        let defaults = serde_json::to_value(AppConfig::default()).expect("serialize defaults");
+        assert_eq!(
+            parsed, defaults,
+            "config.toml.example is out of sync with AppConfig::default()"
+        );
+    }
 }

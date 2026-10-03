@@ -32,8 +32,7 @@ small, isolated change (see [Architecture](#architecture)).
 
 ```bash
 cargo build --release
-cp config.toml.example config.toml   # optional; defaults work without it
-./target/release/local-mcp
+./target/release/local-mcp     # creates ./config.toml on first start
 ```
 
 Optional HTTPS support is compiled in only when requested:
@@ -54,11 +53,17 @@ local-mcp \
   --log-level info
 ```
 
-`--print-example-config` prints a documented example configuration.
+On first start the server writes a commented `./config.toml` (identical to
+`config.toml.example`) if it does not exist yet, so you always have a file to
+inspect and edit. `--config <path>` uses a different location and creates the file
+there too. `--print-example-config` prints the same documented default to stdout.
 
 ---
 
 ## Configuration (`config.toml`)
+
+If `./config.toml` (or the path given to `--config`) does not exist, the server
+creates it with the documented defaults below on the first start.
 
 ```toml
 [server]

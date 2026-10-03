@@ -194,6 +194,9 @@ one registry entry. `providers/mod.rs` holds the factory/ordering logic.
 
 - CLI: `--config <path>` (default `./config.toml`), `--bind`, `--log-level`,
   `--providers <csv>` (override order), `--print-example-config`.
+- On first start a commented default config is written to the `--config` path if it
+  is missing. `config.toml.example` is the source and a unit test keeps it equal to
+  `AppConfig::default()`.
 - Sections: `[server]` (`bind`, `path`, `json_response`, `legacy_session_mode`),
   `[http]` (`timeout_ms`, `user_agent`), `[providers]` (enabled order +
   optional free-tier `api_key` per provider), `[tools]` (enable/disable),

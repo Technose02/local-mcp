@@ -18,6 +18,10 @@ pub enum ConfigError {
         path: PathBuf,
         message: String,
     },
+    Write {
+        path: PathBuf,
+        source: std::io::Error,
+    },
 }
 
 impl ConfigError {
@@ -34,6 +38,13 @@ impl ConfigError {
             message: error.to_string(),
         }
     }
+
+    pub fn write(path: &Path, source: std::io::Error) -> Self {
+        Self::Write {
+            path: path.to_path_buf(),
+            source,
+        }
+    }
 }
 
 impl fmt::Display for ConfigError {
@@ -45,6 +56,9 @@ impl fmt::Display for ConfigError {
             Self::Parse { path, message } => {
                 write!(f, "failed to parse config '{}': {message}", path.display())
             }
+            Self::Write { path, source } => {
+                write!(f, "failed to write config '{}': {source}", path.display())
+            }
         }
     }
 }
@@ -54,6 +68,7 @@ impl std::error::Error for ConfigError {
         match self {
             Self::Read { source, .. } => Some(source),
             Self::Parse { .. } => None,
+            Self::Write { source, .. } => Some(source),
         }
     }
 }
