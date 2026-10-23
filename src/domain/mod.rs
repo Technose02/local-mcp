@@ -8,3 +8,4 @@ pub mod error;
 pub mod explore;
 pub mod fetch;
 pub mod search;
+pub mod textsearch;

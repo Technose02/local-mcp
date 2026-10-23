@@ -20,13 +20,14 @@ use crate::application::server::LocalToolsServer;
 use crate::config::{Cli, ServerSettings, load_config};
 use crate::domain::clock::TimeService;
 use crate::domain::explore::ExploreService;
-use crate::domain::fetch::{FetchService, LinkSource, SiteMapSource};
+use crate::domain::fetch::{FetchService, LinkSource, SiteMapSource, UrlPolicy};
 use crate::domain::search::WebSearchService;
 use crate::error::AppError;
 use crate::infrastructure::cors::{CorsConfig, cors_middleware};
 use crate::infrastructure::http::HttpClient;
+use crate::infrastructure::images::ImageFetcher;
 use crate::infrastructure::providers::{
-    DirectFetcher, build_extract_providers, build_search_providers,
+    DirectFetcher, GithubApi, build_extract_providers, build_search_providers,
 };
 
 #[tokio::main]
@@ -48,9 +49,20 @@ async fn run() -> Result<(), AppError> {
     let config = load_config(&cli)?;
     tracing::debug!(?config, "configuration loaded");
 
-    let http = HttpClient::new(config.http.timeout_ms, config.http.user_agent.clone())?;
+    let http = HttpClient::new(
+        config.http.timeout_ms,
+        config.http.user_agent.clone(),
+        config.fetch.allow_private_network,
+    )?;
 
-    let direct = Arc::new(DirectFetcher::new(http.clone()));
+    if config.fetch.allow_private_network {
+        tracing::warn!("[fetch] allow_private_network = true: SSRF protection is DISABLED");
+    }
+
+    let direct = Arc::new(DirectFetcher::new(
+        http.clone(),
+        config.fetch.allow_private_network,
+    ));
 
     let search_providers = build_search_providers(&config, &http);
     if search_providers.is_empty() {
@@ -71,7 +83,22 @@ async fn run() -> Result<(), AppError> {
     let search_service = Arc::new(WebSearchService::new(search_providers));
     let links: Arc<dyn LinkSource> = direct.clone();
     let sitemap: Arc<dyn SiteMapSource> = direct.clone();
-    let fetch_service = Arc::new(FetchService::new(extract_providers, links.clone()));
+    let fetch_service = Arc::new(
+        FetchService::new(
+            extract_providers,
+            links.clone(),
+            UrlPolicy {
+                allow_private_network: config.fetch.allow_private_network,
+            },
+            config.fetch.cache_entries,
+            std::time::Duration::from_secs(config.fetch.cache_ttl_secs),
+        )
+        .with_pull_requests(Arc::new(GithubApi::new(http.clone())))
+        .with_images(Arc::new(ImageFetcher::new(
+            http.clone(),
+            config.fetch.allow_private_network,
+        ))),
+    );
     let explore_service = Arc::new(ExploreService::new(search_service.clone(), links, sitemap));
     let time_service = Arc::new(TimeService::new(config.time.default_timezone.clone()));
 

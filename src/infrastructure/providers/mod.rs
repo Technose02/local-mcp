@@ -3,10 +3,13 @@
 pub mod direct;
 pub mod duckduckgo;
 pub mod firecrawl;
+pub mod github_api;
+pub mod paced;
 pub mod tavily;
 pub mod wikipedia;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::http::HttpClient;
 use crate::config::AppConfig;
@@ -14,6 +17,13 @@ use crate::domain::fetch::ExtractProvider;
 use crate::domain::search::SearchProvider;
 
 pub use direct::DirectFetcher;
+pub use github_api::GithubApi;
+
+/// Minimum interval between requests to the same provider (parallel harness
+/// calls queue against it instead of triggering 429s).
+fn provider_gap(config: &AppConfig) -> Duration {
+    Duration::from_millis(config.providers.min_interval_ms.max(0) as u64)
+}
 
 /// Build the ordered search-provider chain from configuration.
 pub fn build_search_providers(
@@ -72,7 +82,13 @@ pub fn build_search_providers(
         }
     }
 
+    let gap = provider_gap(config);
     providers
+        .into_iter()
+        .map(|provider| {
+            Arc::new(paced::PacedSearchProvider::new(provider, gap)) as Arc<dyn SearchProvider>
+        })
+        .collect()
 }
 
 /// Build the ordered content-extraction chain from configuration.
@@ -113,5 +129,11 @@ pub fn build_extract_providers(
         }
     }
 
+    let gap = provider_gap(config);
     providers
+        .into_iter()
+        .map(|provider| {
+            Arc::new(paced::PacedExtractProvider::new(provider, gap)) as Arc<dyn ExtractProvider>
+        })
+        .collect()
 }

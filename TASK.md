@@ -257,3 +257,36 @@ The README must document:
 - Optional TLS: `cargo build --features tls` + `[server.tls]` served HTTPS to a
   self-signed cert (200 `initialize`, live `web_search`, HTTPS CORS/PNA preflight).
   Enabling TLS in config without the feature fails fast with a clear message.
+## 12. Post-mortem improvements (2026-10, harness feedback)
+
+A research harness ran a ~20-call real task against this server and filed a
+post-mortem (see `agentic-state/tasks.md` for the finding-by-finding triage).
+Implemented as a consequence:
+
+* **Error hygiene**: upstream bodies never reach the model; errors reduce to
+  `{provider, kind, HTTP status, retry_after_s}` + a global secret/URL-query
+  redactor on the tool-error boundary.
+* **SSRF policy** (`[fetch] allow_private_network = false` by default):
+  loopback/RFC1918/CGNAT/link-local/`.internal`/`.local` blocked for pages,
+  redirects, images and discovered URLs; URL credentials rejected.
+* **Extraction cache** (LRU + TTL + stale-if-error) => stable `start_char`
+  offsets, free repeat reads, resilient 429 storms; provenance fields
+  (`extractor`, `total_chars`, `from_cache`, `stale`, cost accounting).
+* **Retrieval power**: `fetch_url(pattern=…, context=…, outline=…)`
+  in-document grep and heading tree; GitHub `blob/`→`raw` canonicalization;
+  PR state enrichment (`github: {state, merged, …}`); deterministic local
+  HTML→Markdown extraction (headings/lists/code/images preserved).
+* **Rate-limit behavior**: `Retry-After` capture, one jittered transparent
+  retry, per-provider pacing queue (`providers.min_interval_ms`).
+* **Search quality**: `since`, `exclude_domains`, URL dedup, sentence-boundary
+  snippet trimming, `today` injected into every response envelope.
+* **Multimodal**: `fetch_url(max_images=1..3)` returns the page's content
+  images as MCP image blocks (SSRF-safe, filtered, resized, re-encoded JPEG).
+
+New dependencies beyond the original set, each with a concrete job: `regex`
+(pattern search, sanitizer), `base64` (image blocks), `image` (decode/resize,
+pure Rust, feature-trimmed).
+
+Explicitly **not** server-side (harness-side findings): call/result correlation
+(JSON-RPC ids already cover it), duplicate datetime tool (does not exist in
+this repo).

@@ -1,5 +1,5 @@
-//! HTML helpers built on the `tl` parser: DuckDuckGo result parsing, readable
-//! text extraction, link discovery and small text utilities.
+//! HTML helpers built on the `tl` parser: DuckDuckGo result parsing, deterministic
+//! HTML → Markdown extraction, link discovery and small text utilities.
 
 use std::collections::HashSet;
 
@@ -25,6 +25,7 @@ const BLOCK_TAGS: &[&str] = &[
     "dd",
     "dt",
     "figcaption",
+    "img",
 ];
 
 /// Tags whose entire subtree is skipped by the readable extractor.
@@ -225,12 +226,65 @@ pub fn parse_ddg_results(html: &str) -> Result<Vec<SearchHit>, ProviderError> {
     Ok(hits)
 }
 
-/// Extract a readable title + plain-text body from an HTML document.
-pub fn extract_readable(html: &str) -> (Option<String>, String) {
+/// Phrases that are page chrome / loader placeholders, never content. Compared
+/// case-insensitively against a whole extracted block.
+const BOILERPLATE_LINES: &[&str] = &[
+    "skip to content",
+    "skip to main content",
+    "uh oh! there was an error while loading.",
+    "there was an error while loading.",
+    "you signed out in another tab or window",
+    "please sign in to view this content",
+];
+
+/// Long blocks are deduplicated document-wide (GitHub renders discussion
+/// bodies twice: plain + markdown); shorter ones only adjacent-dedup.
+const GLOBAL_DEDUP_MIN_CHARS: usize = 40;
+
+fn is_boilerplate(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let lower = lower.trim();
+    BOILERPLATE_LINES.contains(&lower) || lower.starts_with("uh oh!")
+}
+
+/// Render one block-level element as deterministic markdown.
+fn render_block(name: &str, text: String, raw: String) -> Option<String> {
+    let level = match name {
+        "h1" => Some(1),
+        "h2" => Some(2),
+        "h3" => Some(3),
+        "h4" => Some(4),
+        "h5" => Some(5),
+        "h6" => Some(6),
+        _ => None,
+    };
+    if let Some(level) = level {
+        return (!text.is_empty()).then(|| format!("{} {text}", "#".repeat(level)));
+    }
+    match name {
+        "li" => (!text.is_empty()).then(|| format!("- {text}")),
+        "blockquote" => (!text.is_empty()).then(|| format!("> {text}")),
+        "pre" => {
+            let code = raw.trim();
+            (!code.is_empty()).then(|| format!("```\n{code}\n```"))
+        }
+        _ => (!text.is_empty()).then_some(text),
+    }
+}
+
+/// Extract a readable title + **markdown** body from an HTML document.
+///
+/// The conversion is deterministic (no model, no external API): headings become
+/// `#`..`######`, list items `-`, code blocks fences, quotes `>`, everything
+/// else a text paragraph. Boilerplate lines and duplicated long blocks are
+/// dropped. Determinism keeps character offsets stable across calls, which is
+/// what makes `start_char` paging and `pattern=` matching trustworthy.
+pub fn extract_readable(html: &str, base_url: &str) -> (Option<String>, String) {
     let Ok(dom) = tl::parse(html, tl::ParserOptions::default()) else {
         return (None, String::new());
     };
     let parser = dom.parser();
+    let base = Url::parse(base_url).ok();
 
     let title = dom
         .query_selector("title")
@@ -252,6 +306,8 @@ pub fn extract_readable(html: &str) -> (Option<String>, String) {
     }
 
     let mut blocks: Vec<String> = Vec::new();
+    let mut seen_long: HashSet<String> = HashSet::new();
+    let mut seen_img: HashSet<String> = HashSet::new();
     for node in dom.nodes() {
         let Some(tag) = node.as_tag() else { continue };
         let name = tag.name().as_utf8_str().to_ascii_lowercase();
@@ -265,14 +321,52 @@ pub fn extract_readable(html: &str) -> (Option<String>, String) {
         {
             continue;
         }
-        let text = normalize_whitespace(&tag.inner_text(parser));
-        if text.is_empty() {
+        // Images become markdown image links so downstream grep/canonicalizers
+        // see them and the multimodal pipeline can pick them up.
+        if name == "img" {
+            let Some(src) = attr(tag, "src").map(|src| unescape_html_entities(src.as_str()).trim().to_string())
+            else {
+                continue;
+            };
+            if src.is_empty() || src.starts_with("data:") {
+                continue;
+            }
+            let Some(resolved) = base
+                .as_ref()
+                .and_then(|base| base.join(&src).ok())
+                .filter(|url| url.scheme() == "http" || url.scheme() == "https")
+            else {
+                continue;
+            };
+            let alt = attr(tag, "alt")
+                .map(|alt| normalize_whitespace(&unescape_html_entities(&alt)))
+                .unwrap_or_default();
+            let resolved = resolved.to_string();
+            if seen_img.insert(resolved.clone()) {
+                blocks.push(format!("![{alt}]({resolved})"));
+            }
+            continue;
+        }
+        // `pre` keeps its raw layout; everything else is whitespace-normalized.
+        let (text, raw) = if name == "pre" {
+            let raw = unescape_html_entities(&tag.inner_text(parser));
+            (normalize_whitespace(&raw), raw)
+        } else {
+            let text = normalize_whitespace(&tag.inner_text(parser));
+            (text.clone(), text.clone())
+        };
+        if text.is_empty() || is_boilerplate(&text) {
             continue;
         }
         if blocks.last().map(|last| last == &text).unwrap_or(false) {
             continue;
         }
-        blocks.push(text);
+        if text.chars().count() >= GLOBAL_DEDUP_MIN_CHARS && !seen_long.insert(text.clone()) {
+            continue;
+        }
+        if let Some(rendered) = render_block(&name, text, raw) {
+            blocks.push(rendered);
+        }
     }
 
     (title, blocks.join("\n\n"))
@@ -425,24 +519,46 @@ mod tests {
     }
 
     #[test]
-    fn extract_readable_skips_navigation() {
+    fn extract_readable_emits_markdown_and_strips_boilerplate() {
         let html = r#"
             <html><head><title>Hello</title></head>
             <body>
               <nav><p>Home About Contact</p></nav>
+              <button>Skip to content</button>
               <article>
                 <h1>Heading</h1>
                 <p>First paragraph.</p>
-                <p>Second paragraph.</p>
+                <div><p>Uh oh! There was an error while loading.</p></div>
+                <ul><li>alpha</li><li>beta</li></ul>
+                <pre>let a = 1;
+let b = 2;</pre>
+                <blockquote>Quoted</blockquote>
+                <p><img src="/img/diagram.png" alt="Architecture"></p>
               </article>
               <footer><p>Copyright</p></footer>
             </body></html>
         "#;
-        let (title, text) = extract_readable(html);
+        let (title, text) = extract_readable(html, "https://example.com/docs/");
         assert_eq!(title.as_deref(), Some("Hello"));
-        assert!(text.contains("First paragraph."));
-        assert!(text.contains("Second paragraph."));
+        assert!(text.contains("# Heading"), "{text}");
+        assert!(text.contains("- alpha"), "{text}");
+        assert!(text.contains("```\nlet a = 1;\nlet b = 2;\n```"), "{text}");
+        assert!(text.contains("> Quoted"), "{text}");
+        assert!(
+            text.contains("![Architecture](https://example.com/img/diagram.png)"),
+            "{text}"
+        );
         assert!(!text.contains("Copyright"));
+        assert!(!text.contains("Uh oh"));
+        assert!(!text.contains("Skip to content"));
+    }
+
+    #[test]
+    fn extract_readable_deduplicates_long_blocks_globally() {
+        let long = "This discussion body appears twice on GitHub pages, plain and rendered.";
+        let html = format!("<p>{long}</p><p>{long}</p>");
+        let (_, text) = extract_readable(&html, "https://example.com/");
+        assert_eq!(text.matches("GitHub pages").count(), 1);
     }
 
     #[test]

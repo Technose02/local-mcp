@@ -34,6 +34,18 @@ timeout_ms = 15000
 # requests that do not look like a browser.
 user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
+[fetch]
+# SSRF policy: by default loopback, private (RFC1918), CGNAT, link-local and
+# *.internal / *.local hosts are refused for every URL this server fetches
+# (including redirects and discovered sitemap URLs). Enable only when you
+# intentionally want the model to read services on your own machine/network.
+allow_private_network = false
+# Extracted documents are kept in memory so paging (start_char) is stable
+# across calls, pattern searches are free, and upstream failures can serve a
+# stale copy instead of erroring.
+cache_entries = 16
+cache_ttl_secs = 600
+
 [tools]
 # Tool names that should be registered but return an error when called.
 disabled = []
@@ -55,7 +67,13 @@ default_timezone = "Europe/Berlin"
 order = ["tavily", "duckduckgo", "wikipedia"]
 # Ordered content-extraction chain used by the `fetch_url` tool.
 # Supported: "tavily", "firecrawl", "direct".
+# Note: "tavily" and "firecrawl" fetch the target URL on *their* servers (the URL
+# and the fetched content pass through their API). Set extract_order = ["direct"]
+# to keep every request on your own machine.
 extract_order = ["tavily", "firecrawl", "direct"]
+# Minimum interval between two requests to the same provider (parallel tool
+# calls queue instead of causing upstream 429s). 0 disables pacing.
+min_interval_ms = 500
 
 # --- Per-provider options -----------------------------------------------------
 # `enabled` turns a provider off. `api_key` is optional: leaving it empty uses the
