@@ -7,13 +7,13 @@
 use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::model::{CallToolResult, ContentBlock, ImageContent, Implementation, ServerCapabilities, ServerConfig};
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::application::tools::{
-    CurrentDatetimeArgs, ExploreSiteArgs, FetchUrlArgs, ToolError, WebSearchArgs,
-    run_current_datetime, run_explore_site, run_fetch_url, run_web_search,
+    CurrentDatetimeArgs, ExploreSiteArgs, FetchUrlArgs, InlineImage, ToolError, WebSearchArgs,
+    run_current_datetime, run_explore_site, run_fetch_url, run_web_search, today_for,
 };
 use crate::domain::clock::TimeService;
 use crate::domain::explore::ExploreService;
@@ -48,42 +48,42 @@ impl LocalToolsServer {
     }
 
     #[tool(
-        description = "Search the public web for current information. Use this whenever the answer may be newer than your training data, is missing from your knowledge, or needs a source. Returns ranked results with title, URL and snippet; follow up with fetch_url to read a promising page in full."
+        description = "Search the public web for current information. Use this whenever the answer may be newer than your training data, is missing from your knowledge, or needs a source. Returns ranked results with title, URL and snippet plus `today` (the real current date, so no separate clock call is needed); use `since` (ISO date) and `exclude_domains` to filter SEO-slop and stale pages. Follow up with fetch_url to read a promising page in full."
     )]
     async fn web_search(
         &self,
         Parameters(args): Parameters<WebSearchArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_enabled("web_search")?;
-        let output = run_web_search(&self.search, args)
+        let output = run_web_search(&self.search, args, &today_for(&self.time))
             .await
             .map_err(ToolError::into_error_data)?;
         to_json_result(&output)
     }
 
     #[tool(
-        description = "Download and read a single web page as clean readable text/markdown. Use for documentation, changelogs, release notes, articles or any specific URL. Long pages are paged: use next_start_char with start_char to continue. Set include_links=true to also list the page's links and explore around the destination."
+        description = "Download and read a single web page as clean markdown/text. Long pages are paged with start_char/next_start_char (offsets are stable: repeated reads are cached). To find something in a long page WITHOUT reading it all: pattern='regex' returns matching windows with offsets, or outline=true returns the heading tree with offsets. GitHub text-file URLs are auto-fetched from raw.githubusercontent.com; pull request URLs include a `github` object with state/merged/merged_at. total_chars tells you the document size. For multimodal reading, max_images=1..3 also returns the page's key content images as image blocks."
     )]
     async fn fetch_url(
         &self,
         Parameters(args): Parameters<FetchUrlArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_enabled("fetch_url")?;
-        let output = run_fetch_url(&self.fetch, args)
+        let (output, images) = run_fetch_url(&self.fetch, args, &today_for(&self.time))
             .await
             .map_err(ToolError::into_error_data)?;
-        to_json_result(&output)
+        to_json_result_with_images(&output, images)
     }
 
     #[tool(
-        description = "Explore around a destination: discover pages on a website. Provide `query` to run a site-restricted search, and/or let it list the pages linked from the target plus URLs found in robots.txt/sitemap.xml. Useful to map documentation, find related pages, or locate content on a site you already know."
+        description = "Explore around a destination: discover pages on a website. Provide `query` to run a site-restricted search, and/or let it list the pages linked from the target. Sitemap URLs are omitted unless include_sitemap=true (token-heavy). File/item URLs (e.g. a raw file or a pull request) are rejected with guidance - use fetch_url for those."
     )]
     async fn explore_site(
         &self,
         Parameters(args): Parameters<ExploreSiteArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.ensure_enabled("explore_site")?;
-        let output = run_explore_site(&self.explore, args)
+        let output = run_explore_site(&self.explore, args, &today_for(&self.time))
             .await
             .map_err(ToolError::into_error_data)?;
         to_json_result(&output)
@@ -143,8 +143,35 @@ impl ServerHandler for LocalToolsServer {
 }
 
 fn to_json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
-    let text = serde_json::to_string_pretty(value).map_err(|error| {
+    to_json_result_with_images(value, Vec::new())
+}
+
+fn to_json_result_with_images<T: serde::Serialize>(
+    value: &T,
+    images: Vec<InlineImage>,
+) -> Result<CallToolResult, McpError> {
+    let json = serde_json::to_string_pretty(value).map_err(|error| {
         McpError::internal_error(format!("failed to serialize tool result: {error}"), None)
     })?;
-    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    // Per-call cost surface so the model can self-throttle (chars in context,
+    // rough token estimate at ~4 chars/token).
+    let mut envelope: serde_json::Value = serde_json::from_str(&json)
+        .unwrap_or_else(|_| serde_json::Value::String(json.clone()));
+    if let Some(map) = envelope.as_object_mut() {
+        let chars = json.chars().count();
+        map.insert(
+            "cost".to_string(),
+            serde_json::json!({
+                "chars_returned": chars,
+                "est_tokens": chars.div_ceil(4),
+            }),
+        );
+    }
+    let text = serde_json::to_string_pretty(&envelope)
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+    let mut blocks = vec![ContentBlock::text(text)];
+    blocks.extend(images.into_iter().map(|image| {
+        ContentBlock::Image(ImageContent::new(image.data_base64, image.media_type))
+    }));
+    Ok(CallToolResult::success(blocks))
 }

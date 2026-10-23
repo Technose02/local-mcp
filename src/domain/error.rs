@@ -11,16 +11,30 @@ use std::pin::Pin;
 pub type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// A failure reported by a concrete provider adapter.
+///
+/// Reasons must stay safe to show to the model: never embed raw upstream body
+/// text here (see `infrastructure::sanitize`); the HTTP status and an optional
+/// `retry_after_s` carry the structured signal instead.
 #[derive(Debug, Clone)]
 pub enum ProviderError {
     /// The provider is reachable but returned nothing usable.
     Unavailable { provider: String, reason: String },
     /// The provider request failed at the transport or HTTP level.
-    Http { provider: String, reason: String },
+    Http {
+        provider: String,
+        reason: String,
+        status: Option<u16>,
+        retry_after_s: Option<u64>,
+    },
     /// The provider response could not be understood.
     Decode { provider: String, reason: String },
     /// The provider rejected us (bot challenge, rate limit, ...).
-    Blocked { provider: String, reason: String },
+    Blocked {
+        provider: String,
+        reason: String,
+        status: Option<u16>,
+        retry_after_s: Option<u64>,
+    },
 }
 
 impl ProviderError {
@@ -35,6 +49,35 @@ impl ProviderError {
         Self::Http {
             provider: provider.to_string(),
             reason: reason.into(),
+            status: None,
+            retry_after_s: None,
+        }
+    }
+
+    /// HTTP failure carrying the response status and, for 429/503, the
+    /// `Retry-After` hint in whole seconds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_status(
+        kind: ProviderErrorKind,
+        provider: &str,
+        reason: impl Into<String>,
+        status: Option<u16>,
+        retry_after_s: Option<u64>,
+    ) -> Self {
+        let (provider, reason) = (provider.to_string(), reason.into());
+        match kind {
+            ProviderErrorKind::Http => Self::Http {
+                provider,
+                reason,
+                status,
+                retry_after_s,
+            },
+            ProviderErrorKind::Blocked => Self::Blocked {
+                provider,
+                reason,
+                status,
+                retry_after_s,
+            },
         }
     }
 
@@ -49,6 +92,8 @@ impl ProviderError {
         Self::Blocked {
             provider: provider.to_string(),
             reason: reason.into(),
+            status: None,
+            retry_after_s: None,
         }
     }
 
@@ -72,6 +117,27 @@ impl ProviderError {
         }
     }
 
+    /// HTTP status that produced this error, when known.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Http { status, .. } | Self::Blocked { status, .. } => *status,
+            _ => None,
+        }
+    }
+
+    /// `Retry-After` hint in seconds, when the provider supplied one.
+    pub fn retry_after_s(&self) -> Option<u64> {
+        match self {
+            Self::Http {
+                retry_after_s, ..
+            }
+            | Self::Blocked {
+                retry_after_s, ..
+            } => *retry_after_s,
+            _ => None,
+        }
+    }
+
     fn kind(&self) -> &'static str {
         match self {
             Self::Unavailable { .. } => "unavailable",
@@ -82,15 +148,23 @@ impl ProviderError {
     }
 }
 
+/// Which variant [`ProviderError::with_status`] builds.
+#[derive(Debug, Clone, Copy)]
+pub enum ProviderErrorKind {
+    Http,
+    Blocked,
+}
+
 impl fmt::Display for ProviderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}: {} ({})",
-            self.provider(),
-            self.reason(),
-            self.kind()
-        )
+        write!(f, "{}: {} ({}", self.provider(), self.reason(), self.kind())?;
+        if let Some(status) = self.status() {
+            write!(f, ", HTTP {status}")?;
+        }
+        if let Some(retry_after_s) = self.retry_after_s() {
+            write!(f, ", retry_after_s={retry_after_s}")?;
+        }
+        write!(f, ")")
     }
 }
 

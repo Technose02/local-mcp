@@ -16,6 +16,18 @@ use crate::infrastructure::http::HttpClient;
 const SEARCH_URL: &str = "https://api.tavily.com/search";
 const EXTRACT_URL: &str = "https://api.tavily.com/extract";
 
+/// Whole days between an ISO `YYYY-MM-DD` date and today (1..=3650).
+fn days_since(since: &str) -> Option<u32> {
+    let date: jiff::civil::Date = since.trim().parse().ok()?;
+    let then = date
+        .at(0, 0, 0, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .ok()?
+        .timestamp();
+    let seconds = jiff::Timestamp::now().as_second() - then.as_second();
+    Some((seconds / 86_400).clamp(1, 3650) as u32)
+}
+
 fn apply_auth(request: RequestBuilder, api_key: &Option<String>) -> RequestBuilder {
     match api_key {
         Some(key) => request.bearer_auth(key),
@@ -82,6 +94,11 @@ impl SearchProvider for TavilySearchProvider {
                 Freshness::Week => (Some("news"), Some(7)),
                 Freshness::Month => (Some("news"), Some(30)),
                 Freshness::Year => (Some("news"), Some(365)),
+            };
+            // An explicit `since` date wins over the coarse freshness buckets.
+            let (topic, days) = match query.since.as_deref().and_then(days_since) {
+                Some(days) => (Some("news"), Some(days)),
+                None => (topic, days),
             };
 
             let body = Request {
@@ -176,6 +193,7 @@ impl ExtractProvider for TavilyExtractProvider {
                 .ok_or_else(|| ProviderError::unavailable("tavily", "no extraction result"))?;
 
             Ok(ExtractedDocument {
+                provider: "tavily".to_string(),
                 final_url: item.url,
                 title: item.title,
                 content: item.raw_content.unwrap_or_default(),

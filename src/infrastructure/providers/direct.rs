@@ -12,6 +12,7 @@ use crate::domain::error::{ProviderError, ProviderFuture};
 use crate::domain::explore::host_of;
 use crate::domain::fetch::{
     ContentFormat, ExtractProvider, ExtractedDocument, Link, LinkSource, SiteMapSource,
+    url_host_blocked,
 };
 use crate::infrastructure::html::{extract_links, extract_readable, extract_sitemap_locations};
 use crate::infrastructure::http::HttpClient;
@@ -22,17 +23,28 @@ const SITEMAP_URL_LIMIT: usize = 200;
 #[derive(Clone)]
 pub struct DirectFetcher {
     http: HttpClient,
+    allow_private_network: bool,
 }
 
 impl DirectFetcher {
-    pub fn new(http: HttpClient) -> Self {
-        Self { http }
+    pub fn new(http: HttpClient, allow_private_network: bool) -> Self {
+        Self {
+            http,
+            allow_private_network,
+        }
     }
 
     async fn get_text(
         &self,
         url: &str,
     ) -> Result<(StatusCode, Option<String>, String), ProviderError> {
+        if url_host_blocked(url, self.allow_private_network) {
+            tracing::warn!(url, "direct fetch blocked by URL policy");
+            return Err(ProviderError::unavailable(
+                "direct",
+                "blocked by fetch URL policy (private/internal network host)",
+            ));
+        }
         let request = self
             .http
             .client()
@@ -70,7 +82,7 @@ impl ExtractProvider for DirectFetcher {
                 .unwrap_or(true);
 
             if is_html {
-                let (title, text) = extract_readable(&body);
+                let (title, text) = extract_readable(&body, url);
                 if text.trim().is_empty() {
                     return Err(ProviderError::unavailable(
                         "direct",
@@ -78,13 +90,15 @@ impl ExtractProvider for DirectFetcher {
                     ));
                 }
                 Ok(ExtractedDocument {
+                    provider: "direct".to_string(),
                     final_url: url.to_string(),
                     title,
                     content: text,
-                    format: ContentFormat::Text,
+                    format: ContentFormat::Markdown,
                 })
             } else {
                 Ok(ExtractedDocument {
+                    provider: "direct".to_string(),
                     final_url: url.to_string(),
                     title: None,
                     content: body,

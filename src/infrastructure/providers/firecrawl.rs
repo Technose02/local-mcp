@@ -173,6 +173,7 @@ impl ExtractProvider for FirecrawlScrapeProvider {
             });
 
             Ok(ExtractedDocument {
+                provider: "firecrawl".to_string(),
                 final_url: metadata.source_url.unwrap_or_else(|| url.to_string()),
                 title: metadata.title,
                 content: data.markdown.unwrap_or_default(),

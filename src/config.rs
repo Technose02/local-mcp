@@ -47,6 +47,7 @@ pub struct Cli {
 pub struct AppConfig {
     pub server: ServerSettings,
     pub http: HttpSettings,
+    pub fetch: FetchSettings,
     pub tools: ToolSettings,
     pub usage: UsageSettings,
     pub providers: ProvidersSettings,
@@ -105,6 +106,31 @@ impl Default for HttpSettings {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FetchSettings {
+    /// Allow `fetch_url`/`explore_site` to reach loopback, private, CGNAT and
+    /// link-local hosts (SSRF). Off by default; only the local machine is
+    /// reachable at those addresses, but the fetched content is model-visible.
+    pub allow_private_network: bool,
+    /// Number of extracted documents kept in memory (paging/pattern stability
+    /// and repeat-read cost).
+    pub cache_entries: usize,
+    /// Freshness window for the extraction cache, in seconds. Expired entries
+    /// are still served stale-if-error.
+    pub cache_ttl_secs: u64,
+}
+
+impl Default for FetchSettings {
+    fn default() -> Self {
+        Self {
+            allow_private_network: false,
+            cache_entries: 16,
+            cache_ttl_secs: 600,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ToolSettings {
@@ -141,6 +167,9 @@ pub struct ProvidersSettings {
     pub order: Vec<String>,
     /// Ordered content-extraction chain.
     pub extract_order: Vec<String>,
+    /// Minimum interval between two requests to the same provider, in
+    /// milliseconds. Parallel tool calls queue against it.
+    pub min_interval_ms: i64,
     pub tavily: ProviderOptions,
     pub firecrawl: ProviderOptions,
     pub duckduckgo: ProviderOptions,
@@ -152,6 +181,7 @@ impl Default for ProvidersSettings {
         Self {
             order: vec!["tavily".into(), "duckduckgo".into(), "wikipedia".into()],
             extract_order: vec!["tavily".into(), "firecrawl".into(), "direct".into()],
+            min_interval_ms: 500,
             tavily: ProviderOptions::default(),
             firecrawl: ProviderOptions::default(),
             duckduckgo: ProviderOptions::default(),
